@@ -1,0 +1,83 @@
+
+name: Build LUXCAST
+on: [push]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clean and recreate
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force src -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force src-tauri -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path src | Out-Null
+          New-Item -ItemType Directory -Force -Path src-tauri/src | Out-Null
+          New-Item -ItemType Directory -Force -Path src-tauri/icons | Out-Null
+          # package.json
+          '{"name":"luxcast","version":"0.1.0","type":"module","scripts":{"dev":"vite --port 1420","build":"vite build"},"dependencies":{"react":"^18.3.1","react-dom":"^18.3.1","@mediapipe/selfie_segmentation":"^0.1.0"},"devDependencies":{"@vitejs/plugin-react":"^4.3.3","vite":"^5.4.0"}}' | Set-Content package.json
+          # vite config
+          "import{defineConfig}from'vite';import react from'@vitejs/plugin-react';export default defineConfig({plugins:[react()],server:{port:1420}})" | Set-Content vite.config.js
+          # index
+          "<!DOCTYPE html><html><head><meta charset='UTF-8'/><title>LUXCAST</title></head><body><div id='root'></div><script type='module' src='/src/main.jsx'></script></body></html>" | Set-Content index.html
+          # main jsx
+          "import React from'react';import ReactDOM from'react-dom/client';import App from'./App.jsx';ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App))" | Set-Content src/main.jsx
+          # App.jsx - minimal working
+          @"
+          import {useEffect,useRef,useState} from 'react'
+          export default function App(){
+            const v=useRef(null),c=useRef(null)
+            const [bg,setBg]=useState('studio')
+            useEffect(()=>{
+              let raf
+              async function start(){
+                const s=await navigator.mediaDevices.getUserMedia({video:{width:1280,height:720}})
+                v.current.srcObject=s;await v.current.play()
+                const m=await import('@mediapipe/selfie_segmentation')
+                const seg=new m.SelfieSegmentation({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}`})
+                seg.setOptions({modelSelection:1})
+                seg.onResults(r=>{
+                  const ctx=c.current.getContext('2d')
+                  const W=c.current.width=1280,H=c.current.height=720
+                  ctx.clearRect(0,0,W,H)
+                  if(bg==='studio'){let g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#1a1a2e');g.addColorStop(1,'#0f0f1e');ctx.fillStyle=g;ctx.fillRect(0,0,W,H)}
+                  else{ctx.fillStyle=bg;ctx.fillRect(0,0,W,H)}
+                  ctx.save()
+                  ctx.drawImage(r.segmentationMask,0,0,W,H)
+                  ctx.globalCompositeOperation='source-in'
+                  ctx.drawImage(r.image,0,0,W,H)
+                  ctx.restore()
+                })
+                const loop=async()=>{await seg.send({image:v.current});raf=requestAnimationFrame(loop)};loop()
+              }
+              start()
+              return()=>cancelAnimationFrame(raf)
+            },[bg])
+            return React.createElement('div',{style:{background:'#000',color:'#fff',minHeight:'100vh',display:'flex',flexDirection:'column'}},React.createElement('header',{style:{padding:16,background:'#18181b'}},'LUXCAST STUDIO 12MB - '+bg),React.createElement('div',{style:{display:'flex',gap:16,padding:16,flex:1}},React.createElement('div',{style:{width:260,background:'#18181b',padding:12,borderRadius:12}},React.createElement('button',{onClick:()=>setBg('studio'),style:{width:'100%',padding:8,marginBottom:8,background:bg==='studio'?'#7c3aed':'#27272a'}},'Studio'),React.createElement('button',{onClick:()=>setBg('blur'),style:{width:'100%',padding:8,marginBottom:8,background:'#27272a'}},'Blur'),React.createElement('button',{onClick:()=>setBg('#000'),style:{width:'100%',padding:8,background:'#27272a'}},'Negro')),React.createElement('div',{style:{flex:1,background:'#18181b',borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center'}},React.createElement('video',{ref:v,autoPlay:true,muted:true,playsInline:true,style:{display:'none'}}),React.createElement('canvas',{ref:c,style:{width:'100%',height:'100%'}}))))
+          }
+          "@ | Set-Content src/App.jsx
+
+          # Tauri files
+          "[package]`nname=`"luxcast`"`nversion=`"0.1.0`"`nedition=`"2021`"`n[build-dependencies]`ntauri-build={version=`"1.5`"}`n[dependencies]`ntauri={version=`"1.6`",features=[`"api-all`"]}`nserde={version=`"1.0`",features=[`"derive`"]}`nserde_json=`"1.0`"" | Set-Content src-tauri/Cargo.toml
+          "#![cfg_attr(not(debug_assertions), windows_subsystem = `"windows`")]`nfn main(){tauri::Builder::default().run(tauri::generate_context!()).expect(`"err`");}" | Set-Content src-tauri/src/main.rs
+          "fn main(){tauri_build::build()}" | Set-Content src-tauri/build.rs
+          '{"build":{"beforeBuildCommand":"npm run build","devPath":"http://localhost:1420","distDir":"../dist"},"package":{"productName":"LUXCAST","version":"0.1.0"},"tauri":{"allowlist":{"all":true},"bundle":{"identifier":"com.luxcast.studio","icon":["icons/icon.png"],"targets":"all"},"windows":[{"title":"LUXCAST","width":1280,"height":720}]}}' | Set-Content src-tauri/tauri.conf.json
+          $b64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
+          [IO.File]::WriteAllBytes("./src-tauri/icons/icon.png", [Convert]::FromBase64String($b64))
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm install
+      - run: npm run build
+      - run: cargo install tauri-cli --locked
+      - run: cargo tauri build
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: src-tauri/target/release/bundle/nsis/*.exe
+          tag_name: v0.1.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
