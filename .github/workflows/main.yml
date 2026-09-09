@@ -5,30 +5,41 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Unzip project
+      - name: Extract ZIP
         shell: pwsh
         run: |
-          $zip = Get-ChildItem -Filter *.zip | Select-Object -First 1
-          Write-Host "Usando ZIP: $($zip.Name)"
-          Expand-Archive -Path $zip.FullName -DestinationPath temp_extract -Force
-          Copy-Item -Path temp_extract/* -Destination. -Recurse -Force -ErrorAction SilentlyContinue
-          if (Test-Path temp_extract/luxcast) { Copy-Item -Path temp_extract/luxcast/* -Destination. -Recurse -Force -ErrorAction SilentlyContinue }
-          if (Test-Path temp_extract/LUXCAST_FINAL) { Copy-Item -Path temp_extract/LUXCAST_FINAL/* -Destination. -Recurse -Force -ErrorAction SilentlyContinue }
-          if (Test-Path temp_extract/LUXCAST_FINAL/luxcast) { Copy-Item -Path temp_extract/LUXCAST_FINAL/luxcast/* -Destination. -Recurse -Force -ErrorAction SilentlyContinue }
-          if (Test-Path luxcast) { Copy-Item -Path luxcast/* -Destination. -Recurse -Force -ErrorAction SilentlyContinue }
+          $zipFile = Get-ChildItem -Path. -Filter "*.zip" | Select-Object -First 1
+          if (-not $zipFile) { Write-Error "No ZIP found"; exit 1 }
+          Write-Host "Found ZIP: $($zipFile.Name)"
+          Expand-Archive -Path $zipFile.FullName -DestinationPath./extracted -Force
+          Get-ChildItem./extracted -Recurse | ForEach-Object { Write-Host $_.FullName }
+          # Buscar donde esta package.json
+          $pkg = Get-ChildItem./extracted -Recurse -Filter package.json | Select-Object -First 1
+          if ($pkg) {
+            $sourceDir = $pkg.Directory.FullName
+            Write-Host "Source dir: $sourceDir"
+            Copy-Item -Path "$sourceDir/*" -Destination./ -Recurse -Force
+          } else {
+            Copy-Item -Path./extracted/* -Destination./ -Recurse -Force
+          }
           dir
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - uses: dtolnay/rust-toolchain@stable
-      - run: npm install
-      - run: npm install @mediapipe/selfie_segmentation
-      - run: cargo install tauri-cli --locked
-      - run: cargo tauri build
-      - uses: softprops/action-gh-release@v1
+      - name: Install deps
+        run: |
+          npm install
+          npm install @mediapipe/selfie_segmentation
+      - name: Install Tauri
+        run: cargo install tauri-cli --locked
+      - name: Build
+        run: cargo tauri build
+      - name: Release
+        uses: softprops/action-gh-release@v1
         with:
           files: src-tauri/target/release/bundle/nsis/*.exe
           tag_name: v0.1.0
-          name: LUXCAST 12MB
+          name: LUXCAST 12MB Instalador
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
